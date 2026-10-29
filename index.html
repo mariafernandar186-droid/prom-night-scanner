@@ -1,0 +1,187 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Escáner QR | PROM NIGHT</title>
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    body{margin:0;background:#101010;color:white;font-family:Arial,sans-serif}
+    main{max-width:520px;margin:auto;padding:20px 14px}
+    header{text-align:center;border-bottom:1px solid #6b5427;padding:12px}
+    header small{color:#d7b76b;letter-spacing:3px}
+    h1{color:#f1dfa7;font-family:Georgia,serif;letter-spacing:2px}
+    section{background:#1d1d1d;border:1px solid #453b29;border-radius:14px;padding:16px;margin-top:18px}
+    button,input{width:100%;box-sizing:border-box;padding:13px;border-radius:9px;margin:6px 0;font-size:16px}
+    button{border:0;background:#d7b76b;color:#17130a;font-weight:bold}
+    input{background:#111;color:white;border:1px solid #555}
+    .muted{color:#bbb;font-size:13px;line-height:1.5}
+    #reader{overflow:hidden;border-radius:10px;background:#080808}
+    #status{padding:12px;background:#111;border-radius:8px;margin-top:12px;overflow-wrap:anywhere}
+    #manualArea{display:none;margin-top:14px}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <small>III BTPE · SENIORS 2026</small>
+    <h1>PROM NIGHT</h1>
+    <div class="muted">ESCÁNER QR EXTERNO</div>
+  </header>
+
+  <section>
+    <h2>Escanea la entrada</h2>
+    <p class="muted">
+      Permite el acceso a la cámara cuando Safari lo solicite.
+      Apunta al QR hasta que se lea el código.
+    </p>
+
+    <div id="reader"></div>
+    <button id="start">Activar cámara</button>
+    <button id="stop" style="display:none">Detener cámara</button>
+
+    <div id="status" aria-live="polite">Listo para iniciar.</div>
+
+    <div id="manualArea">
+      <p class="muted">Si no se pudo enviar el código, cópialo en la pantalla principal.</p>
+      <input id="manualResult" readonly>
+      <button id="copy">Copiar código</button>
+    </div>
+  </section>
+</main>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const parentOrigin = params.get('parentOrigin');
+
+  let qrReader = null;
+  let running = false;
+  let busy = false;
+
+  const $ = id => document.getElementById(id);
+
+  function status(text) {
+    $('status').textContent = text;
+  }
+
+  async function stopCamera() {
+    if (qrReader && running) {
+      try {
+        await qrReader.stop();
+      } catch (e) {}
+    }
+
+    running = false;
+    $('start').style.display = 'block';
+    $('stop').style.display = 'none';
+  }
+
+  async function sendCode(rawCode) {
+    if (busy) return;
+    busy = true;
+
+    const code = String(rawCode || '').trim().toUpperCase();
+    if (!code) {
+      busy = false;
+      return;
+    }
+
+    await stopCamera();
+
+    $('manualResult').value = code;
+    $('manualArea').style.display = 'block';
+
+    try {
+      if (!parentOrigin || !window.opener || window.opener.closed) {
+        throw new Error('No se encontró la pestaña principal.');
+      }
+
+      // Solo se envía el código, nunca la contraseña ni los nombres.
+      window.opener.postMessage(
+        { type: 'PROM_NIGHT_QR', code: code },
+        parentOrigin
+      );
+
+      status('Código enviado: ' + code +
+        '. Vuelve a la pestaña principal para ver el resultado.');
+    } catch (e) {
+      status('No se pudo enviar automáticamente. Código: ' + code +
+        '. Cópialo y pégalo en la pantalla principal.');
+    }
+
+    busy = false;
+  }
+
+  async function startCamera() {
+    if (running || busy) return;
+
+    if (!window.isSecureContext ||
+        !navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia) {
+      status('Este navegador no permite acceder a la cámara desde esta página. Abre el sitio HTTPS directamente en Safari.');
+      return;
+    }
+
+    if (typeof Html5Qrcode === 'undefined') {
+      status('No se pudo cargar el lector QR. Revisa tu conexión a internet.');
+      return;
+    }
+
+    $('start').disabled = true;
+    status('Solicitando permiso de cámara...');
+
+    try {
+      qrReader = qrReader || new Html5Qrcode('reader');
+      const cameras = await Html5Qrcode.getCameras();
+
+      if (!cameras || cameras.length === 0) {
+        throw new Error('No se detectó una cámara.');
+      }
+
+      const camera =
+        cameras.find(c => /back|rear|trasera|environment/i.test(c.label)) ||
+        cameras[cameras.length - 1];
+
+      await qrReader.start(
+        camera.id,
+        { fps: 10, qrbox: { width: 230, height: 230 } },
+        decodedText => sendCode(decodedText),
+        () => {}
+      );
+
+      running = true;
+      $('start').style.display = 'none';
+      $('stop').style.display = 'block';
+      status('Cámara activa. Enfoca el código QR.');
+
+    } catch (e) {
+      status('No se pudo abrir la cámara: ' +
+        (e.message || e) +
+        '. Revisa los permisos de Safari y vuelve a intentarlo.');
+    } finally {
+      $('start').disabled = false;
+    }
+  }
+
+  $('start').addEventListener('click', startCamera);
+
+  $('stop').addEventListener('click', async () => {
+    await stopCamera();
+    status('Cámara detenida.');
+  });
+
+  $('copy').addEventListener('click', async () => {
+    const value = $('manualResult').value;
+    try {
+      await navigator.clipboard.writeText(value);
+      status('Código copiado: ' + value);
+    } catch (e) {
+      $('manualResult').focus();
+      $('manualResult').select();
+      status('Selecciona y copia el código manualmente.');
+    }
+  });
+</script>
+</body>
+</html>
